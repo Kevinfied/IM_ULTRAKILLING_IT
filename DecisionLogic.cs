@@ -31,6 +31,6 @@ public static class DecisionLogic
     public static bool PRrankStillPossible(float elapsedSeconds, float sRankSeconds, int restarts) =>
         restarts == 0 && (sRankSeconds <= 0f || elapsedSeconds <= sRankSeconds);
 
-    public static float ScoreNavigationGoal(float distance, bool open, bool locked, bool visited) =>
-        !open || locked || visited ? float.NegativeInfinity : 100f - distance;
+    public static float ScoreNavigationGoal(float distance, bool open, bool locked, bool visited, bool reachable) =>
+        !open || locked || visited || !reachable ? float.NegativeInfinity : 100f - distance;
 }

@@ -142,10 +142,15 @@ public sealed class Plugin : BaseUnityPlugin
         player.rb.velocity = Vector3.MoveTowards(horizontal, toward * speed, 55f * Time.fixedDeltaTime) + vertical;
         bool lowObstacle = Physics.Raycast(player.transform.position + up * 0.25f, toward, 1.5f, Physics.DefaultRaycastLayers,
             QueryTriggerInteraction.Ignore);
-        bool wall = Physics.Raycast(player.transform.position + up * 1.6f, toward, 1.5f, Physics.DefaultRaycastLayers,
+        bool wall = Physics.Raycast(player.transform.position + up * 1.1f, toward, 1.5f, Physics.DefaultRaycastLayers,
             QueryTriggerInteraction.Ignore);
         if (wall && Time.unscaledTime >= recoveryUntil)
         {
+            if (navigationDoor != null && target == null)
+            {
+                visitedDoors.Add(navigationDoor.GetInstanceID());
+                navigationDoor = null;
+            }
             recoveryUntil = Time.unscaledTime + 1.25f;
             destination = player.transform.position + Quaternion.AngleAxis(75f, up) * toward * 12f;
             Transition(BotState.Recover, "Full-height wall; turning instead of wall-jumping");
@@ -224,7 +229,7 @@ public sealed class Plugin : BaseUnityPlugin
                 continue;
             }
             float score = DecisionLogic.ScoreNavigationGoal(distance, door.open, door.locked,
-                visitedDoors.Contains(door.GetInstanceID()));
+                visitedDoors.Contains(door.GetInstanceID()), HasClearPathToDoor(door));
             if (score <= bestScore) continue;
             best = door;
             bestScore = score;
@@ -260,6 +265,16 @@ public sealed class Plugin : BaseUnityPlugin
         foreach (Door door in FindObjectsOfType<Door>())
             if (Vector3.Distance(player.transform.position, door.transform.position) < 4f)
                 visitedDoors.Add(door.GetInstanceID());
+    }
+
+    private bool HasClearPathToDoor(Door door)
+    {
+        if (player == null) return false;
+        Vector3 origin = player.transform.position + player.transform.up;
+        Vector3 direction = door.transform.position + player.transform.up - origin;
+        if (!Physics.SphereCast(origin, 0.25f, direction.normalized, out RaycastHit hit, direction.magnitude,
+                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)) return true;
+        return hit.transform.GetComponentInParent<Door>() == door;
     }
 
     private static bool HasLineOfSight(Vector3 origin, Vector3 point, EnemyIdentifier enemy)
@@ -339,10 +354,17 @@ public sealed class Plugin : BaseUnityPlugin
     private void CheckProgress()
     {
         if (player == null || Time.unscaledTime < nextProgressCheck) return;
-        float progress = Vector3.Distance(progressOrigin, player.transform.position);
+        Vector3 route = destination - progressOrigin;
+        Vector3 movement = player.transform.position - progressOrigin;
+        float progress = route.sqrMagnitude > 0.01f ? Vector3.Dot(movement, route.normalized) : movement.magnitude;
         progressOrigin = player.transform.position;
         nextProgressCheck = Time.unscaledTime + 2f;
         if (progress >= 1f || state == BotState.Engage) return;
+        if (navigationDoor != null && target == null)
+        {
+            visitedDoors.Add(navigationDoor.GetInstanceID());
+            navigationDoor = null;
+        }
         recoveryUntil = Time.unscaledTime + 1.5f;
         nextJump = 0f;
         Transition(BotState.Recover, $"Stuck: only {progress:0.0}m progress");

@@ -14,8 +14,10 @@ Check(float.IsNegativeInfinity(DecisionLogic.ScoreTarget(new TargetFacts(1f, tru
 Check(DecisionLogic.PRrankStillPossible(59f, 60f, 0), "A clean run below S-time should remain viable.");
 Check(!DecisionLogic.PRrankStillPossible(61f, 60f, 0), "A run beyond S-time should fail.");
 Check(!DecisionLogic.PRrankStillPossible(10f, 60f, 1), "A restarted run cannot P-rank.");
-Check(DecisionLogic.ScoreNavigationGoal(10f, true, false, false) >
-      DecisionLogic.ScoreNavigationGoal(30f, true, false, false), "The nearest usable door should win.");
-Check(float.IsNegativeInfinity(DecisionLogic.ScoreNavigationGoal(1f, false, false, false)),
+Check(DecisionLogic.ScoreNavigationGoal(10f, true, false, false, true) >
+      DecisionLogic.ScoreNavigationGoal(30f, true, false, false, true), "The nearest usable door should win.");
+Check(float.IsNegativeInfinity(DecisionLogic.ScoreNavigationGoal(1f, false, false, false, true)),
     "Closed doors should not be selected.");
+Check(float.IsNegativeInfinity(DecisionLogic.ScoreNavigationGoal(1f, true, false, false, false)),
+    "Doors behind glass or walls should not be selected.");
 Console.WriteLine("Decision logic checks passed.");
