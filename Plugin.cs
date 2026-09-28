@@ -38,6 +38,7 @@ public sealed class Plugin : BaseUnityPlugin
     private GunControl? guns;
     private StatsManager? stats;
     private Door? navigationDoor;
+    private Vector3 doorApproachDirection;
     private Vector3 destination;
     private Vector3 progressOrigin;
     private float nextScan;
@@ -95,11 +96,12 @@ public sealed class Plugin : BaseUnityPlugin
             {
                 nextScan = Time.unscaledTime + 0.25f;
                 target = FindTarget();
-                if (target == null && Time.unscaledTime >= recoveryUntil)
+                if (target == null && navigationDoor == null && Time.unscaledTime >= recoveryUntil)
                     destination = FindNavigationDestination();
             }
             if (target != null && !target.dead)
             {
+                navigationDoor = null;
                 destination = target.GetCenter().position;
                 AimAt(destination);
                 float distance = Vector3.Distance(player.transform.position, destination);
@@ -142,8 +144,14 @@ public sealed class Plugin : BaseUnityPlugin
         player.rb.velocity = Vector3.MoveTowards(horizontal, toward * speed, 55f * Time.fixedDeltaTime) + vertical;
         bool lowObstacle = Physics.Raycast(player.transform.position + up * 0.25f, toward, 1.5f, Physics.DefaultRaycastLayers,
             QueryTriggerInteraction.Ignore);
-        bool wall = Physics.Raycast(player.transform.position + up * 1.1f, toward, 1.5f, Physics.DefaultRaycastLayers,
-            QueryTriggerInteraction.Ignore);
+        bool wall = Physics.Raycast(player.transform.position + up * 1.1f, toward, out RaycastHit wallHit, 1.5f,
+            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+        bool intendedDoor = wall && navigationDoor != null && wallHit.transform.GetComponentInParent<Door>() == navigationDoor;
+        if (intendedDoor)
+        {
+            wall = false;
+            lowObstacle = false;
+        }
         if (wall && Time.unscaledTime >= recoveryUntil)
         {
             if (navigationDoor != null && target == null)
@@ -223,11 +231,6 @@ public sealed class Plugin : BaseUnityPlugin
         foreach (Door door in FindObjectsOfType<Door>())
         {
             float distance = Vector3.Distance(player.transform.position, door.transform.position);
-            if (distance < 3.5f)
-            {
-                visitedDoors.Add(door.GetInstanceID());
-                continue;
-            }
             float score = DecisionLogic.ScoreNavigationGoal(distance, door.open, door.locked,
                 visitedDoors.Contains(door.GetInstanceID()), HasClearPathToDoor(door));
             if (score <= bestScore) continue;
@@ -240,7 +243,10 @@ public sealed class Plugin : BaseUnityPlugin
         {
             action = $"Navigate through {best.name}";
             Vector3 doorPosition = best.transform.position;
-            return new Vector3(doorPosition.x, player.transform.position.y, doorPosition.z);
+            doorApproachDirection = Vector3.ProjectOnPlane(doorPosition - player.transform.position,
+                player.transform.up).normalized;
+            Vector3 beyondDoor = doorPosition + doorApproachDirection * 3f;
+            return new Vector3(beyondDoor.x, player.transform.position.y, beyondDoor.z);
         }
 
         Vector3 origin = player.transform.position + player.transform.up;
@@ -354,6 +360,17 @@ public sealed class Plugin : BaseUnityPlugin
     private void CheckProgress()
     {
         if (player == null || Time.unscaledTime < nextProgressCheck) return;
+        if (navigationDoor != null && target == null && DecisionLogic.HasCrossedDoor(Vector3.Dot(
+                player.transform.position - navigationDoor.transform.position, doorApproachDirection)))
+        {
+            visitedDoors.Add(navigationDoor.GetInstanceID());
+            navigationDoor = null;
+            destination = player.transform.position + doorApproachDirection * 8f;
+            progressOrigin = player.transform.position;
+            nextProgressCheck = Time.unscaledTime + 2f;
+            action = "Crossed doorway; continue forward";
+            return;
+        }
         Vector3 route = destination - progressOrigin;
         Vector3 movement = player.transform.position - progressOrigin;
         float progress = route.sqrMagnitude > 0.01f ? Vector3.Dot(movement, route.normalized) : movement.magnitude;

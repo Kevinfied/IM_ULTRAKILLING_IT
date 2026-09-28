@@ -33,4 +33,6 @@ public static class DecisionLogic
 
     public static float ScoreNavigationGoal(float distance, bool open, bool locked, bool visited, bool reachable) =>
         !open || locked || visited || !reachable ? float.NegativeInfinity : 100f - distance;
+
+    public static bool HasCrossedDoor(float signedDistance) => signedDistance > 0.75f;
 }

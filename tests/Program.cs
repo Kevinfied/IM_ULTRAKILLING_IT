@@ -20,4 +20,6 @@ Check(float.IsNegativeInfinity(DecisionLogic.ScoreNavigationGoal(1f, false, fals
     "Closed doors should not be selected.");
 Check(float.IsNegativeInfinity(DecisionLogic.ScoreNavigationGoal(1f, true, false, false, false)),
     "Doors behind glass or walls should not be selected.");
+Check(!DecisionLogic.HasCrossedDoor(0.5f), "Approaching a door should not count as crossing it.");
+Check(DecisionLogic.HasCrossedDoor(1f), "Moving beyond a door should count as crossing it.");
 Console.WriteLine("Decision logic checks passed.");
