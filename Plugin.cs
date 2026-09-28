@@ -55,10 +55,10 @@ public sealed class Plugin : BaseUnityPlugin
     private void Awake()
     {
         Logger = base.Logger;
-        toggleKey = Config.Bind("Controls", "Toggle", KeyCode.Insert, "Enable or disable the bot.");
-        pauseKey = Config.Bind("Controls", "Pause", KeyCode.Home, "Pause or resume the bot.");
-        restartKey = Config.Bind("Controls", "Restart", KeyCode.End, "Restart the current mission.");
-        debugKey = Config.Bind("Controls", "DebugOverlay", KeyCode.Delete, "Show or hide the debug overlay.");
+        toggleKey = Config.Bind("Controls", "Toggle", KeyCode.F1, "Enable or disable the bot.");
+        pauseKey = Config.Bind("Controls", "Pause", KeyCode.F2, "Pause or resume the bot.");
+        restartKey = Config.Bind("Controls", "Restart", KeyCode.F3, "Restart the current mission.");
+        debugKey = Config.Bind("Controls", "DebugOverlay", KeyCode.F4, "Show or hide the debug overlay.");
         moveSpeed = Config.Bind("Bot", "MoveSpeed", 18f, "Desired horizontal movement speed.");
         attackInterval = Config.Bind("Bot", "MinimumAttackInterval", 0.18f, "Minimum seconds between attack requests.");
         weaponRotationSeconds = Config.Bind("Bot", "WeaponRotationSeconds", 4f, "Seconds between weapon-slot changes.");
@@ -67,7 +67,7 @@ public sealed class Plugin : BaseUnityPlugin
         killsWeight = Config.Bind("Priorities", "Kills", 1f, "Preference for targets that count as kills.");
         styleWeight = Config.Bind("Priorities", "Style", 0.65f, "Preference for bosses and fresh weapon use.");
         autoRestart = Config.Bind("PRank", "AutoRestart", false, "Restart when S-time is certainly missed or a restart occurred.");
-        Logger.LogInfo("IM ULTRAKILLING IT loaded. Insert toggle, Home pause, End restart, Delete overlay.");
+        Logger.LogInfo("IM ULTRAKILLING IT loaded. F1 toggle, F2 pause, F3 restart, F4 overlay.");
         gameObject.hideFlags = HideFlags.DontSaveInEditor;
     }
 
@@ -379,7 +379,7 @@ public sealed class Plugin : BaseUnityPlugin
         if (!showDebug) return;
         GUI.Box(new Rect(12, 12, 430, 190), "IM ULTRAKILLING IT");
         GUILayout.BeginArea(new Rect(24, 40, 405, 155));
-        GUILayout.Label($"State: {state} | Insert toggle | Home pause | End restart | Delete overlay");
+        GUILayout.Label($"State: {state} | F1 toggle | F2 pause | F3 restart | F4 overlay");
         GUILayout.Label($"Target: {(target != null ? target.FullName : "none")}");
         GUILayout.Label($"Action: {action}");
         GUILayout.Label($"Destination: {destination.x:0.0}, {destination.y:0.0}, {destination.z:0.0}");
