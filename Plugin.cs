@@ -37,6 +37,7 @@ public sealed class Plugin : BaseUnityPlugin
     private NewMovement? player;
     private GunControl? guns;
     private StatsManager? stats;
+    private Door? navigationDoor;
     private Vector3 destination;
     private Vector3 progressOrigin;
     private float nextScan;
@@ -46,6 +47,7 @@ public sealed class Plugin : BaseUnityPlugin
     private float nextProgressCheck;
     private float recoveryUntil;
     private int nextSlot;
+    private readonly HashSet<int> visitedDoors = new();
 
     private static readonly BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
     private readonly Dictionary<Type, MethodInfo?> shootMethods = new();
@@ -93,6 +95,8 @@ public sealed class Plugin : BaseUnityPlugin
             {
                 nextScan = Time.unscaledTime + 0.25f;
                 target = FindTarget();
+                if (target == null && Time.unscaledTime >= recoveryUntil)
+                    destination = FindNavigationDestination();
             }
             if (target != null && !target.dead)
             {
@@ -106,8 +110,9 @@ public sealed class Plugin : BaseUnityPlugin
             else
             {
                 target = null;
-                destination = player.transform.position + player.transform.forward * 20f;
-                Transition(BotState.Explore, "No visible living enemy");
+                if (Time.unscaledTime >= recoveryUntil)
+                    Transition(BotState.Explore, navigationDoor != null ? "Moving to open door" : "Scanning for a clear route");
+                AimAt(destination + player.transform.up);
             }
             RotateWeapon();
             CheckProgress();
@@ -135,13 +140,21 @@ public sealed class Plugin : BaseUnityPlugin
         Vector3 horizontal = Vector3.ProjectOnPlane(player.rb.velocity, up);
         float speed = state == BotState.Engage ? moveSpeed.Value * 0.7f : moveSpeed.Value;
         player.rb.velocity = Vector3.MoveTowards(horizontal, toward * speed, 55f * Time.fixedDeltaTime) + vertical;
-        bool obstacle = Physics.Raycast(player.transform.position + up, toward, 2f, Physics.DefaultRaycastLayers,
+        bool lowObstacle = Physics.Raycast(player.transform.position + up * 0.25f, toward, 1.5f, Physics.DefaultRaycastLayers,
             QueryTriggerInteraction.Ignore);
-        if (Time.unscaledTime >= nextJump && (obstacle || destination.y > player.transform.position.y + 2.5f))
+        bool wall = Physics.Raycast(player.transform.position + up * 1.6f, toward, 1.5f, Physics.DefaultRaycastLayers,
+            QueryTriggerInteraction.Ignore);
+        if (wall && Time.unscaledTime >= recoveryUntil)
+        {
+            recoveryUntil = Time.unscaledTime + 1.25f;
+            destination = player.transform.position + Quaternion.AngleAxis(75f, up) * toward * 12f;
+            Transition(BotState.Recover, "Full-height wall; turning instead of wall-jumping");
+        }
+        else if (Time.unscaledTime >= nextJump && ((lowObstacle && !wall) || destination.y > player.transform.position.y + 2.5f))
         {
             nextJump = Time.unscaledTime + 0.8f;
             player.Jump();
-            action = obstacle ? "Jump obstacle" : "Jump toward target";
+            action = lowObstacle ? "Jump low obstacle" : "Jump toward target";
         }
     }
 
@@ -153,6 +166,9 @@ public sealed class Plugin : BaseUnityPlugin
         if (value)
         {
             RefreshGameObjects();
+            visitedDoors.Clear();
+            navigationDoor = null;
+            MarkNearbyDoorsVisited();
             progressOrigin = player != null ? player.transform.position : Vector3.zero;
             nextProgressCheck = Time.unscaledTime + 2f;
             Transition(BotState.Explore, "Enabled by user");
@@ -192,6 +208,58 @@ public sealed class Plugin : BaseUnityPlugin
             bestScore = score;
         }
         return best;
+    }
+
+    private Vector3 FindNavigationDestination()
+    {
+        if (player == null) return Vector3.zero;
+        Door? best = null;
+        float bestScore = float.NegativeInfinity;
+        foreach (Door door in FindObjectsOfType<Door>())
+        {
+            float distance = Vector3.Distance(player.transform.position, door.transform.position);
+            if (distance < 3.5f)
+            {
+                visitedDoors.Add(door.GetInstanceID());
+                continue;
+            }
+            float score = DecisionLogic.ScoreNavigationGoal(distance, door.open, door.locked,
+                visitedDoors.Contains(door.GetInstanceID()));
+            if (score <= bestScore) continue;
+            best = door;
+            bestScore = score;
+        }
+
+        navigationDoor = best;
+        if (best != null)
+        {
+            action = $"Navigate through {best.name}";
+            Vector3 doorPosition = best.transform.position;
+            return new Vector3(doorPosition.x, player.transform.position.y, doorPosition.z);
+        }
+
+        Vector3 origin = player.transform.position + player.transform.up;
+        Vector3 bestDirection = player.transform.forward;
+        float bestClearance = 0f;
+        foreach (float angle in new[] { 0f, 45f, -45f, 90f, -90f, 180f })
+        {
+            Vector3 direction = Quaternion.AngleAxis(angle, player.transform.up) * player.transform.forward;
+            float clearance = Physics.Raycast(origin, direction, out RaycastHit hit, 15f,
+                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore) ? hit.distance : 15f;
+            if (clearance <= bestClearance) continue;
+            bestClearance = clearance;
+            bestDirection = direction;
+        }
+        action = "Explore clearest direction";
+        return player.transform.position + bestDirection * Mathf.Max(4f, bestClearance - 1f);
+    }
+
+    private void MarkNearbyDoorsVisited()
+    {
+        if (player == null) return;
+        foreach (Door door in FindObjectsOfType<Door>())
+            if (Vector3.Distance(player.transform.position, door.transform.position) < 4f)
+                visitedDoors.Add(door.GetInstanceID());
     }
 
     private static bool HasLineOfSight(Vector3 origin, Vector3 point, EnemyIdentifier enemy)

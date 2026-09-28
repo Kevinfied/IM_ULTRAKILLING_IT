@@ -13,7 +13,7 @@ Disabling the bot stops all movement, aiming, firing, and weapon switching by th
 
 ## Current vertical slice
 
-The bot finds the highest-scoring visible living enemy, aims through `CameraController`, moves through `NewMovement`, jumps over short obstructions, fires the current weapon, rotates populated weapon slots, detects stalls, displays live time/kills/style targets, and can conservatively restart a clearly failed P-rank attempt. Automatic restarts are off by default.
+The bot finds the highest-scoring visible living enemy, aims through `CameraController`, moves through `NewMovement`, follows nearby open doors, jumps over low obstructions, turns away from full-height walls, fires the current weapon, rotates populated weapon slots, detects stalls, displays live time/kills/style targets, and can conservatively restart a clearly failed P-rank attempt. Automatic restarts are off by default.
 
 This prototype is not yet a general level-completion bot. It has no authored route to exits, traversal objectives, skulls, or switches, and it cannot yet guarantee a P-rank on any level.
 

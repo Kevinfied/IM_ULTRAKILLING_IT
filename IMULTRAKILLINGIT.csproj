@@ -5,7 +5,7 @@
     <AssemblyName>IMULTRAKILLINGIT</AssemblyName>
     <Product>IM ULTRAKILLING IT</Product>
     <GUID>com.realk.ultrakill.imultrakillingit</GUID>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Nullable>enable</Nullable>
     <LangVersion>13.0</LangVersion>
     <UltrakillDirectory Condition="'$(UltrakillDirectory)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..'))</UltrakillDirectory>
