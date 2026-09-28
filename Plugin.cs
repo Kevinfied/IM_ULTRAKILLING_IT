@@ -5,6 +5,7 @@ using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using UnityEngine;
+using UnityEngine.AI;
 
 namespace IMULTRAKILLINGIT;
 
@@ -40,6 +41,10 @@ public sealed class Plugin : BaseUnityPlugin
     private Door? navigationDoor;
     private Vector3 doorApproachDirection;
     private Vector3 destination;
+    private Vector3 navigationGoal;
+    private Vector3[] pathCorners = Array.Empty<Vector3>();
+    private int pathCornerIndex;
+    private bool usingNavMesh;
     private Vector3 progressOrigin;
     private float nextScan;
     private float nextAttack;
@@ -48,6 +53,7 @@ public sealed class Plugin : BaseUnityPlugin
     private float nextProgressCheck;
     private float recoveryUntil;
     private float navigationCommitUntil;
+    private float nextPathRefresh;
     private int nextSlot;
     private readonly HashSet<int> visitedDoors = new();
 
@@ -61,7 +67,7 @@ public sealed class Plugin : BaseUnityPlugin
         pauseKey = Config.Bind("Controls", "Pause", KeyCode.F2, "Pause or resume the bot.");
         restartKey = Config.Bind("Controls", "Restart", KeyCode.F3, "Restart the current mission.");
         debugKey = Config.Bind("Controls", "DebugOverlay", KeyCode.F4, "Show or hide the debug overlay.");
-        moveSpeed = Config.Bind("Bot", "MoveSpeed", 18f, "Desired horizontal movement speed.");
+        moveSpeed = Config.Bind("Bot", "MoveSpeed", 28f, "Desired horizontal movement speed.");
         attackInterval = Config.Bind("Bot", "MinimumAttackInterval", 0.18f, "Minimum seconds between attack requests.");
         weaponRotationSeconds = Config.Bind("Bot", "WeaponRotationSeconds", 4f, "Seconds between weapon-slot changes.");
         survivalWeight = Config.Bind("Priorities", "Survival", 1.25f, "Preference for keeping distance from nearby threats.");
@@ -104,6 +110,7 @@ public sealed class Plugin : BaseUnityPlugin
             if (target != null && !target.dead)
             {
                 navigationDoor = null;
+                usingNavMesh = false;
                 destination = target.GetCenter().position;
                 AimAt(destination);
                 float distance = Vector3.Distance(player.transform.position, destination);
@@ -133,6 +140,7 @@ public sealed class Plugin : BaseUnityPlugin
     private void FixedUpdate()
     {
         if (!enabledBot || paused || player == null || player.dead || state == BotState.Disabled) return;
+        UpdatePathSteering();
         Vector3 up = player.transform.up;
         Vector3 toward = Vector3.ProjectOnPlane(destination - player.transform.position, up).normalized;
         if (state == BotState.Recover && Time.unscaledTime < recoveryUntil)
@@ -160,6 +168,7 @@ public sealed class Plugin : BaseUnityPlugin
             {
                 visitedDoors.Add(navigationDoor.GetInstanceID());
                 navigationDoor = null;
+                usingNavMesh = false;
             }
             recoveryUntil = Time.unscaledTime + 1.25f;
             destination = player.transform.position + Quaternion.AngleAxis(75f, up) * toward * 12f;
@@ -183,6 +192,8 @@ public sealed class Plugin : BaseUnityPlugin
             RefreshGameObjects();
             visitedDoors.Clear();
             navigationDoor = null;
+            usingNavMesh = false;
+            pathCorners = Array.Empty<Vector3>();
             navigationCommitUntil = 0f;
             MarkNearbyDoorsVisited();
             progressOrigin = player != null ? player.transform.position : Vector3.zero;
@@ -231,27 +242,36 @@ public sealed class Plugin : BaseUnityPlugin
         if (player == null) return Vector3.zero;
         Door? best = null;
         float bestScore = float.NegativeInfinity;
+        Vector3[] bestPath = Array.Empty<Vector3>();
         foreach (Door door in FindObjectsOfType<Door>())
         {
-            float distance = Vector3.Distance(player.transform.position, door.transform.position);
-            float score = DecisionLogic.ScoreNavigationGoal(distance, door.open, door.locked,
-                visitedDoors.Contains(door.GetInstanceID()), HasClearPathToDoor(door));
+            bool reachable = TryCalculateNavPath(door.transform.position, out Vector3[] path, out float pathLength);
+            float score = DecisionLogic.ScoreNavigationGoal(pathLength, !door.locked,
+                visitedDoors.Contains(door.GetInstanceID()), reachable);
             if (score <= bestScore) continue;
             best = door;
             bestScore = score;
+            bestPath = path;
         }
 
         navigationDoor = best;
         if (best != null)
         {
-            action = $"Navigate through {best.name}";
+            action = $"NavMesh to openable {best.name}";
             Vector3 doorPosition = best.transform.position;
-            doorApproachDirection = Vector3.ProjectOnPlane(doorPosition - player.transform.position,
-                player.transform.up).normalized;
-            Vector3 beyondDoor = doorPosition + doorApproachDirection * 3f;
-            return new Vector3(beyondDoor.x, player.transform.position.y, beyondDoor.z);
+            Vector3 approachOrigin = bestPath.Length > 1 ? bestPath[bestPath.Length - 2] : player.transform.position;
+            doorApproachDirection = Vector3.ProjectOnPlane(doorPosition - approachOrigin, player.transform.up).normalized;
+            if (doorApproachDirection.sqrMagnitude < 0.01f)
+                doorApproachDirection = Vector3.ProjectOnPlane(doorPosition - player.transform.position,
+                    player.transform.up).normalized;
+            navigationGoal = doorPosition + doorApproachDirection * 3f;
+            if (TryCalculateNavPath(navigationGoal, out Vector3[] throughDoorPath, out _)) bestPath = throughDoorPath;
+            SetPath(bestPath);
+            return destination;
         }
 
+        usingNavMesh = false;
+        pathCorners = Array.Empty<Vector3>();
         Vector3 origin = player.transform.position + player.transform.up;
         Vector3 bestDirection = player.transform.forward;
         float bestClearance = 0f;
@@ -276,14 +296,50 @@ public sealed class Plugin : BaseUnityPlugin
                 visitedDoors.Add(door.GetInstanceID());
     }
 
-    private bool HasClearPathToDoor(Door door)
+    private bool TryCalculateNavPath(Vector3 goal, out Vector3[] corners, out float length)
     {
-        if (player == null) return false;
-        Vector3 origin = player.transform.position + player.transform.up;
-        Vector3 direction = door.transform.position + player.transform.up - origin;
-        if (!Physics.SphereCast(origin, 0.25f, direction.normalized, out RaycastHit hit, direction.magnitude,
-                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)) return true;
-        return hit.transform.GetComponentInParent<Door>() == door;
+        corners = Array.Empty<Vector3>();
+        length = float.PositiveInfinity;
+        if (player == null
+            || !NavMesh.SamplePosition(player.transform.position, out NavMeshHit start, 4f, NavMesh.AllAreas)
+            || !NavMesh.SamplePosition(goal, out NavMeshHit end, 4f, NavMesh.AllAreas)) return false;
+        var path = new NavMeshPath();
+        if (!NavMesh.CalculatePath(start.position, end.position, NavMesh.AllAreas, path)
+            || path.status != NavMeshPathStatus.PathComplete || path.corners.Length < 2) return false;
+        corners = path.corners;
+        length = 0f;
+        for (int i = 1; i < corners.Length; i++) length += Vector3.Distance(corners[i - 1], corners[i]);
+        return true;
+    }
+
+    private void SetPath(Vector3[] corners)
+    {
+        pathCorners = corners;
+        pathCornerIndex = corners.Length > 1 ? 1 : 0;
+        usingNavMesh = corners.Length > 0;
+        if (usingNavMesh) destination = corners[pathCornerIndex];
+        nextPathRefresh = Time.unscaledTime + 0.5f;
+    }
+
+    private void UpdatePathSteering()
+    {
+        if (!usingNavMesh || player == null || target != null) return;
+        if (navigationDoor != null && navigationDoor.locked)
+        {
+            navigationDoor = null;
+            usingNavMesh = false;
+            return;
+        }
+        if (navigationDoor != null && Time.unscaledTime >= nextPathRefresh)
+        {
+            nextPathRefresh = Time.unscaledTime + 0.5f;
+            if (TryCalculateNavPath(navigationGoal, out Vector3[] refreshedPath, out _)) SetPath(refreshedPath);
+        }
+        while (pathCornerIndex < pathCorners.Length - 1
+               && Vector3.ProjectOnPlane(pathCorners[pathCornerIndex] - player.transform.position,
+                   player.transform.up).sqrMagnitude < 2.25f)
+            pathCornerIndex++;
+        if (pathCornerIndex < pathCorners.Length) destination = pathCorners[pathCornerIndex];
     }
 
     private static bool HasLineOfSight(Vector3 origin, Vector3 point, EnemyIdentifier enemy)
@@ -369,6 +425,8 @@ public sealed class Plugin : BaseUnityPlugin
             visitedDoors.Add(navigationDoor.GetInstanceID());
             MarkNearbyDoorsVisited(2.5f);
             navigationDoor = null;
+            usingNavMesh = false;
+            pathCorners = Array.Empty<Vector3>();
             destination = player.transform.position + doorApproachDirection * 8f;
             navigationCommitUntil = Time.unscaledTime + 2f;
             progressOrigin = player.transform.position;
@@ -386,6 +444,7 @@ public sealed class Plugin : BaseUnityPlugin
         {
             visitedDoors.Add(navigationDoor.GetInstanceID());
             navigationDoor = null;
+            usingNavMesh = false;
         }
         recoveryUntil = Time.unscaledTime + 1.5f;
         nextJump = 0f;
@@ -427,6 +486,7 @@ public sealed class Plugin : BaseUnityPlugin
         GUILayout.Label($"Target: {(target != null ? target.FullName : "none")}");
         GUILayout.Label($"Action: {action}");
         GUILayout.Label($"Destination: {destination.x:0.0}, {destination.y:0.0}, {destination.z:0.0}");
+        GUILayout.Label($"Path: {(usingNavMesh ? $"NavMesh corner {pathCornerIndex + 1}/{pathCorners.Length}" : "ray fallback")}");
         if (stats != null)
             GUILayout.Label($"Time: {stats.seconds:0.0}/{Last(stats.timeRanks)}s  Kills: {stats.kills}/{Last(stats.killRanks)}  Style: {stats.stylePoints}/{Last(stats.styleRanks)}");
         GUILayout.Label($"Reason: {reason}");

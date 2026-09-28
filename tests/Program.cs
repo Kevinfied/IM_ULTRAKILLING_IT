@@ -14,12 +14,12 @@ Check(float.IsNegativeInfinity(DecisionLogic.ScoreTarget(new TargetFacts(1f, tru
 Check(DecisionLogic.PRrankStillPossible(59f, 60f, 0), "A clean run below S-time should remain viable.");
 Check(!DecisionLogic.PRrankStillPossible(61f, 60f, 0), "A run beyond S-time should fail.");
 Check(!DecisionLogic.PRrankStillPossible(10f, 60f, 1), "A restarted run cannot P-rank.");
-Check(DecisionLogic.ScoreNavigationGoal(10f, true, false, false, true) >
-      DecisionLogic.ScoreNavigationGoal(30f, true, false, false, true), "The nearest usable door should win.");
-Check(float.IsNegativeInfinity(DecisionLogic.ScoreNavigationGoal(1f, false, false, false, true)),
-    "Closed doors should not be selected.");
-Check(float.IsNegativeInfinity(DecisionLogic.ScoreNavigationGoal(1f, true, false, false, false)),
-    "Doors behind glass or walls should not be selected.");
+Check(DecisionLogic.ScoreNavigationGoal(10f, true, false, true) >
+      DecisionLogic.ScoreNavigationGoal(30f, true, false, true), "The shortest reachable door path should win.");
+Check(float.IsNegativeInfinity(DecisionLogic.ScoreNavigationGoal(1f, false, false, true)),
+    "Locked doors should not be selected.");
+Check(float.IsNegativeInfinity(DecisionLogic.ScoreNavigationGoal(1f, true, false, false)),
+    "Doors without a complete path should not be selected.");
 Check(!DecisionLogic.HasCrossedDoor(0.5f), "Approaching a door should not count as crossing it.");
 Check(DecisionLogic.HasCrossedDoor(1f), "Moving beyond a door should count as crossing it.");
 Console.WriteLine("Decision logic checks passed.");
