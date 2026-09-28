@@ -47,6 +47,7 @@ public sealed class Plugin : BaseUnityPlugin
     private float nextWeaponRotation;
     private float nextProgressCheck;
     private float recoveryUntil;
+    private float navigationCommitUntil;
     private int nextSlot;
     private readonly HashSet<int> visitedDoors = new();
 
@@ -96,7 +97,8 @@ public sealed class Plugin : BaseUnityPlugin
             {
                 nextScan = Time.unscaledTime + 0.25f;
                 target = FindTarget();
-                if (target == null && navigationDoor == null && Time.unscaledTime >= recoveryUntil)
+                if (target == null && navigationDoor == null && Time.unscaledTime >= recoveryUntil
+                    && Time.unscaledTime >= navigationCommitUntil)
                     destination = FindNavigationDestination();
             }
             if (target != null && !target.dead)
@@ -181,6 +183,7 @@ public sealed class Plugin : BaseUnityPlugin
             RefreshGameObjects();
             visitedDoors.Clear();
             navigationDoor = null;
+            navigationCommitUntil = 0f;
             MarkNearbyDoorsVisited();
             progressOrigin = player != null ? player.transform.position : Vector3.zero;
             nextProgressCheck = Time.unscaledTime + 2f;
@@ -252,7 +255,7 @@ public sealed class Plugin : BaseUnityPlugin
         Vector3 origin = player.transform.position + player.transform.up;
         Vector3 bestDirection = player.transform.forward;
         float bestClearance = 0f;
-        foreach (float angle in new[] { 0f, 45f, -45f, 90f, -90f, 180f })
+        foreach (float angle in new[] { 0f, 45f, -45f, 90f, -90f })
         {
             Vector3 direction = Quaternion.AngleAxis(angle, player.transform.up) * player.transform.forward;
             float clearance = Physics.Raycast(origin, direction, out RaycastHit hit, 15f,
@@ -265,11 +268,11 @@ public sealed class Plugin : BaseUnityPlugin
         return player.transform.position + bestDirection * Mathf.Max(4f, bestClearance - 1f);
     }
 
-    private void MarkNearbyDoorsVisited()
+    private void MarkNearbyDoorsVisited(float radius = 4f)
     {
         if (player == null) return;
         foreach (Door door in FindObjectsOfType<Door>())
-            if (Vector3.Distance(player.transform.position, door.transform.position) < 4f)
+            if (Vector3.Distance(player.transform.position, door.transform.position) < radius)
                 visitedDoors.Add(door.GetInstanceID());
     }
 
@@ -364,8 +367,10 @@ public sealed class Plugin : BaseUnityPlugin
                 player.transform.position - navigationDoor.transform.position, doorApproachDirection)))
         {
             visitedDoors.Add(navigationDoor.GetInstanceID());
+            MarkNearbyDoorsVisited(2.5f);
             navigationDoor = null;
             destination = player.transform.position + doorApproachDirection * 8f;
+            navigationCommitUntil = Time.unscaledTime + 2f;
             progressOrigin = player.transform.position;
             nextProgressCheck = Time.unscaledTime + 2f;
             action = "Crossed doorway; continue forward";
