@@ -9,7 +9,6 @@ internal sealed class NavigationMovementController
     private readonly HazardDetector hazards;
     private NavigationRoute? route;
     private int cornerIndex;
-    private float nextJump;
 
     public NavigationMovementController(NavigationSettings settings, HazardDetector hazards)
     {
@@ -49,16 +48,23 @@ internal sealed class NavigationMovementController
     {
         if (route == null || route.Corners.Length == 0) return;
         AdvanceWaypoint(player);
-        if (RouteReached)
+        Vector3 steeringPoint = CurrentWaypoint;
+        if (RouteReached && TryGetCrossingTarget(objective, route, out Vector3 crossingTarget))
+        {
+            RouteReached = false;
+            steeringPoint = crossingTarget;
+            Action = "Driving through progression trigger";
+        }
+        else if (RouteReached)
         {
             Decelerate(player);
             return;
         }
 
         Vector3 up = player.transform.up;
-        Vector3 direction = Vector3.ProjectOnPlane(CurrentWaypoint - player.transform.position, up).normalized;
+        Vector3 direction = Vector3.ProjectOnPlane(steeringPoint - player.transform.position, up).normalized;
         if (direction.sqrMagnitude < 0.01f) return;
-        SmoothLook(player, CurrentWaypoint + up * 0.8f);
+        SmoothLook(player, steeringPoint + up * 0.8f);
 
         if (!hazards.HasSafeGroundAhead(player, direction, settings.MaximumSafeDrop()))
         {
@@ -69,23 +75,12 @@ internal sealed class NavigationMovementController
         }
 
         if (hazards.TryGetObstacle(player, direction, out RaycastHit obstacle)
-            && !IsIntendedDoor(obstacle, objective))
+            && !CanPassDoor(obstacle, objective))
         {
-            bool headBlocked = Physics.Raycast(player.transform.position + up * 1.1f, direction, 1.4f,
-                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
-            if (!headBlocked && player.standing && Time.unscaledTime >= nextJump)
-            {
-                nextJump = Time.unscaledTime + 0.8f;
-                player.Jump();
-                Action = "Jump low obstacle";
-            }
-            else
-            {
-                BlockedReason = $"Body blocked by {obstacle.collider.name}";
-                Action = "Waiting to replan";
-                Decelerate(player);
-                return;
-            }
+            BlockedReason = $"Body blocked by {obstacle.collider.name}";
+            Action = "Waiting to replan";
+            Decelerate(player);
+            return;
         }
 
         BlockedReason = string.Empty;
@@ -93,7 +88,7 @@ internal sealed class NavigationMovementController
         Vector3 vertical = Vector3.Project(player.rb.velocity, up);
         Vector3 horizontal = Vector3.ProjectOnPlane(player.rb.velocity, up);
         float speed = settings.MoveSpeed() * (player.standing ? 1f : 0.65f);
-        player.rb.velocity = Vector3.MoveTowards(horizontal, direction * speed, 80f * Time.fixedDeltaTime) + vertical;
+        player.rb.velocity = Vector3.MoveTowards(horizontal, direction * speed, 200f * Time.fixedDeltaTime) + vertical;
     }
 
     public void DrawDebug()
@@ -123,9 +118,24 @@ internal sealed class NavigationMovementController
         }
     }
 
-    private static bool IsIntendedDoor(RaycastHit hit, NavigationObjective? objective) =>
-        objective is DoorObjective doorObjective
-        && hit.transform.GetComponentInParent<Door>() == doorObjective.Door;
+    private static bool CanPassDoor(RaycastHit hit, NavigationObjective? objective)
+    {
+        Door door = hit.transform.GetComponentInParent<Door>();
+        return door != null && (!door.locked || objective is DoorObjective doorObjective && door == doorObjective.Door);
+    }
+
+    private static bool TryGetCrossingTarget(NavigationObjective? objective, NavigationRoute route,
+        out Vector3 target)
+    {
+        target = default;
+        if (objective is DoorObjective door)
+            target = door.Position + route.ApproachDirection * 3f;
+        else if (objective is CheckpointObjective checkpoint)
+            target = checkpoint.Position + route.ApproachDirection * 2f;
+        else
+            return false;
+        return true;
+    }
 
     private static void Decelerate(NewMovement player)
     {
