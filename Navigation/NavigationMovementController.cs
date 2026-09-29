@@ -74,15 +74,6 @@ internal sealed class NavigationMovementController
             return;
         }
 
-        if (hazards.TryGetObstacle(player, direction, out RaycastHit obstacle)
-            && !CanPassDoor(obstacle, objective))
-        {
-            BlockedReason = $"Body blocked by {obstacle.collider.name}";
-            Action = "Waiting to replan";
-            Decelerate(player);
-            return;
-        }
-
         BlockedReason = string.Empty;
         Action = player.standing ? "Run to waypoint" : "Air steer to waypoint";
         Vector3 vertical = Vector3.Project(player.rb.velocity, up);
@@ -116,12 +107,6 @@ internal sealed class NavigationMovementController
             RouteReached = true;
             Action = "Route endpoint reached";
         }
-    }
-
-    private static bool CanPassDoor(RaycastHit hit, NavigationObjective? objective)
-    {
-        Door door = hit.transform.GetComponentInParent<Door>();
-        return door != null && (!door.locked || objective is DoorObjective doorObjective && door == doorObjective.Door);
     }
 
     private static bool TryGetCrossingTarget(NavigationObjective? objective, NavigationRoute route,

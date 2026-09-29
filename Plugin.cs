@@ -10,6 +10,7 @@ using UnityEngine;
 namespace IMULTRAKILLINGIT;
 
 [BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
+[DefaultExecutionOrder(10000)]
 public sealed class Plugin : BaseUnityPlugin
 {
     private enum BotState { Disabled, Paused, Explore, Engage, Chase, Recover }
@@ -64,7 +65,7 @@ public sealed class Plugin : BaseUnityPlugin
         pauseKey = Config.Bind("Controls", "Pause", KeyCode.F2, "Pause or resume the bot.");
         restartKey = Config.Bind("Controls", "Restart", KeyCode.F3, "Restart the current mission.");
         debugKey = Config.Bind("Controls", "DebugOverlay", KeyCode.F4, "Show or hide the debug overlay.");
-        moveSpeed = Config.Bind("Bot", "MoveSpeed", 42f, "Desired horizontal movement speed.");
+        moveSpeed = Config.Bind("Bot", "MoveSpeed", 60f, "Desired horizontal movement speed.");
         attackInterval = Config.Bind("Bot", "MinimumAttackInterval", 0.18f, "Minimum seconds between attack requests.");
         weaponRotationSeconds = Config.Bind("Bot", "WeaponRotationSeconds", 4f, "Seconds between weapon-slot changes.");
         survivalWeight = Config.Bind("Priorities", "Survival", 1.25f, "Preference for keeping distance from nearby threats.");
