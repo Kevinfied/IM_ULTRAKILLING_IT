@@ -5,9 +5,16 @@ Experimental single-player heuristic bot for ULTRAKILL and BepInEx 5.
 ## Controls
 
 - F1: enable/disable the bot
-- F2: pause/resume
+- F2: pause/resume while enabled; start/stop route recording while disabled
 - F3: restart the mission
 - F4: toggle the debug overlay
+
+### Record a level route
+
+1. Leave the bot disabled and press F2 at the level start.
+2. Play normally, including jumps and shooting breakable glass.
+3. Press F2 again to save, then restart the level.
+4. Press F1 to replay it. Combat temporarily takes control and the route resumes afterward.
 
 Disabling the bot stops all movement, aiming, firing, and weapon switching by the plugin on the next frame. The game's own input components are never disabled.
 

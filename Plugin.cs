@@ -54,6 +54,7 @@ public sealed class Plugin : BaseUnityPlugin
     private float combatRecoveryUntil;
     private int nextSlot;
     private NavigationController navigation = null!;
+    private DemonstrationRouteController demonstration = null!;
 
     private static readonly BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
     private readonly Dictionary<Type, MethodInfo?> shootMethods = new();
@@ -89,38 +90,55 @@ public sealed class Plugin : BaseUnityPlugin
             () => Mathf.Max(1f, maximumSafeDrop.Value),
             () => showDebug && debugDrawing.Value,
             () => verboseNavigationLogs.Value));
-        Logger.LogInfo("IM ULTRAKILLING IT loaded. F1 toggle, F2 pause, F3 restart, F4 overlay.");
+        demonstration = new DemonstrationRouteController(Logger, () => moveSpeed.Value);
+        Logger.LogInfo("IM ULTRAKILLING IT loaded. F1 toggle, F2 pause/record, F3 restart, F4 overlay.");
         gameObject.hideFlags = HideFlags.DontSaveInEditor;
     }
 
     private void Update()
     {
+        RefreshGameObjects();
         if (Input.GetKeyDown(toggleKey.Value)) SetEnabled(!enabledBot);
-        if (Input.GetKeyDown(pauseKey.Value) && enabledBot)
+        if (Input.GetKeyDown(pauseKey.Value))
         {
-            paused = !paused;
-            Transition(paused ? BotState.Paused : BotState.Explore, paused ? "Paused by user" : "Resumed by user");
+            if (enabledBot)
+            {
+                paused = !paused;
+                Transition(paused ? BotState.Paused : BotState.Explore,
+                    paused ? "Paused by user" : "Resumed by user");
+            }
+            else if (player != null)
+                demonstration.ToggleRecording(player);
         }
         if (Input.GetKeyDown(debugKey.Value)) showDebug = !showDebug;
         if (Input.GetKeyDown(restartKey.Value)) RestartMission("Manual restart");
-        if (!enabledBot || paused) return;
+        if (!enabledBot)
+        {
+            if (player != null) demonstration.RecordFrame(player);
+            return;
+        }
+        if (paused) return;
 
         try
         {
-            RefreshGameObjects();
             if (player == null)
             {
                 Transition(BotState.Recover, "Waiting for player");
                 return;
             }
-            if (navigation.State == NavigationState.Disabled) navigation.Enable(player);
+            bool recordedRoute = demonstration.EnsurePlayback(player);
+            if (recordedRoute)
+                navigation.Disable("Recorded route owns movement");
+            else if (navigation.State == NavigationState.Disabled)
+                navigation.Enable(player);
             if (Time.unscaledTime >= nextScan)
             {
                 nextScan = Time.unscaledTime + 0.25f;
                 target = FindTarget();
             }
             bool combatActive = target != null && !target.dead;
-            navigation.Update(player, combatActive);
+            demonstration.SetSuspended(combatActive, player);
+            if (!recordedRoute) navigation.Update(player, combatActive);
             if (combatActive)
             {
                 combatDestination = target!.GetCenter().position;
@@ -133,10 +151,18 @@ public sealed class Plugin : BaseUnityPlugin
             else
             {
                 target = null;
-                NavigationSnapshot nav = navigation.Snapshot;
-                Transition(nav.State == NavigationState.Recovering ? BotState.Recover : BotState.Explore, nav.Reason);
+                if (recordedRoute)
+                {
+                    if (Time.unscaledTime >= nextAttack && demonstration.ConsumeFireRequest()) Attack();
+                    Transition(BotState.Explore, demonstration.Status);
+                }
+                else
+                {
+                    NavigationSnapshot nav = navigation.Snapshot;
+                    Transition(nav.State == NavigationState.Recovering ? BotState.Recover : BotState.Explore, nav.Reason);
+                }
             }
-            RotateWeapon();
+            if (!recordedRoute || combatActive) RotateWeapon();
             CheckPRankFailure();
         }
         catch (Exception exception)
@@ -152,6 +178,7 @@ public sealed class Plugin : BaseUnityPlugin
     {
         if (!enabledBot || paused || player == null || player.dead || state == BotState.Disabled) return;
         if (target != null && !target.dead) CombatFixedUpdate();
+        else if (demonstration.PlaybackActive) demonstration.FixedTick(player);
         else navigation.FixedTick(player);
     }
 
@@ -195,11 +222,15 @@ public sealed class Plugin : BaseUnityPlugin
         RefreshGameObjects();
         if (value && player != null)
         {
-            navigation.Enable(player);
+            demonstration.StopRecording();
+            demonstration.ResetPlayback();
+            if (!demonstration.EnsurePlayback(player)) navigation.Enable(player);
+            else navigation.Disable("Recorded route owns movement");
             Transition(BotState.Explore, "Enabled by user");
         }
         else
         {
+            demonstration.ResetPlayback();
             navigation.Disable(value ? "Waiting for player" : "Disabled by user");
             Transition(value ? BotState.Recover : BotState.Disabled,
                 value ? "Waiting for player" : "Disabled by user; player control untouched");
@@ -324,6 +355,7 @@ public sealed class Plugin : BaseUnityPlugin
         Logger.LogWarning($"Restarting: {why}");
         reason = why;
         target = null;
+        demonstration.ResetPlayback();
         navigation.ResetForRestart();
         OptionsManager? options = OptionsManager.Instance;
         if (options != null) options.RestartMission();
@@ -342,14 +374,18 @@ public sealed class Plugin : BaseUnityPlugin
     {
         if (!showDebug) return;
         NavigationSnapshot nav = navigation.Snapshot;
-        GUI.Box(new Rect(12, 12, 560, 275), "IM ULTRAKILLING IT");
-        GUILayout.BeginArea(new Rect(24, 40, 535, 235));
-        GUILayout.Label($"State: {state}/{nav.State} | F1 toggle | F2 pause | F3 restart | F4 overlay");
+        GUI.Box(new Rect(12, 12, 620, 300), "IM ULTRAKILLING IT");
+        GUILayout.BeginArea(new Rect(24, 40, 595, 260));
+        GUILayout.Label($"State: {state}/{nav.State} | F1 bot | F2 pause/record | F3 restart | F4 overlay");
+        GUILayout.Label($"Recording: {demonstration.Recording} | Playback: {demonstration.PlaybackActive} | {demonstration.Status}");
         GUILayout.Label($"Combat target: {(target != null ? target.FullName : "none")}");
-        GUILayout.Label($"Objective: {nav.Objective}");
+        GUILayout.Label($"Objective: {(demonstration.PlaybackActive ? "Recorded demonstration" : nav.Objective)}");
         GUILayout.Label($"Action: {(target != null ? action : nav.Action)}");
-        GUILayout.Label($"Waypoint: {nav.Waypoint.x:0.0}, {nav.Waypoint.y:0.0}, {nav.Waypoint.z:0.0} "
-                        + $"({nav.Corner + 1}/{Mathf.Max(1, nav.CornerCount)})");
+        Vector3 waypoint = demonstration.PlaybackActive ? demonstration.CurrentWaypoint : nav.Waypoint;
+        int corner = demonstration.PlaybackActive ? demonstration.PointIndex : nav.Corner;
+        int cornerCount = demonstration.PlaybackActive ? demonstration.PointCount : nav.CornerCount;
+        GUILayout.Label($"Waypoint: {waypoint.x:0.0}, {waypoint.y:0.0}, {waypoint.z:0.0} "
+                        + $"({corner + 1}/{Mathf.Max(1, cornerCount)})");
         GUILayout.Label($"World: {nav.Doors} doors, {nav.Checkpoints} checkpoints, {nav.Exits} exits | recovery {nav.RecoveryLevel}");
         if (player != null)
             GUILayout.Label($"Velocity: {player.rb.velocity.magnitude:0.0} | grounded: {player.standing} | falling: {player.falling}");
