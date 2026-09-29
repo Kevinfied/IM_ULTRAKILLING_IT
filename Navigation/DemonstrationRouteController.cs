@@ -11,14 +11,14 @@ namespace IMULTRAKILLINGIT.Navigation;
 internal sealed class DemonstrationRouteController
 {
     [Serializable]
-    private sealed class RouteData
+    public sealed class RouteData
     {
         public string scene = string.Empty;
         public List<RoutePoint> points = new();
     }
 
     [Serializable]
-    private sealed class RoutePoint
+    public sealed class RoutePoint
     {
         public Vector3 position;
         public float yaw;
@@ -40,6 +40,8 @@ internal sealed class DemonstrationRouteController
     {
         this.logger = logger;
         this.moveSpeed = moveSpeed;
+        string probe = JsonUtility.ToJson(new RouteData { points = new List<RoutePoint> { new() } });
+        if (!probe.Contains("\"points\"")) throw new InvalidOperationException("Route point serialization unavailable.");
     }
 
     public bool Recording { get; private set; }
@@ -79,7 +81,7 @@ internal sealed class DemonstrationRouteController
             return;
         }
         bool jump = Input.GetKeyDown(KeyCode.Space);
-        bool fire = Input.GetMouseButton(0);
+        bool fire = Input.GetMouseButtonDown(0);
         Vector3 previous = route.points[route.points.Count - 1].position;
         if (!jump && !fire && Time.unscaledTime < nextSample
             && (player.transform.position - previous).sqrMagnitude < 2.25f) return;
