@@ -11,11 +11,15 @@ Experimental single-player heuristic bot for ULTRAKILL and BepInEx 5.
 
 Disabling the bot stops all movement, aiming, firing, and weapon switching by the plugin on the next frame. The game's own input components are never disabled.
 
-## Current vertical slice
+## Navigation milestone 1
 
-The bot finds the highest-scoring visible living enemy, aims through `CameraController`, moves through `NewMovement`, follows the shortest complete Unity NavMesh path to an unvisited unlocked door, jumps over low obstructions, turns away from full-height walls, fires the current weapon, rotates populated weapon slots, detects stalls, displays live time/kills/style targets, and can conservatively restart a clearly failed P-rank attempt. Automatic restarts are off by default. Movement speed defaults to 28 and remains configurable.
+Navigation is split into world scanning, semantic objectives, NavMesh route planning, waypoint movement, hazard checks, stuck detection, recovery, and debugging. On activation it inspects the current scene and current player state, waits for a safe landing when enabled mid-air, and selects reachable incomplete checkpoints, exits, or unlocked unvisited doors. Routes use complete Unity NavMesh paths; when no semantic objective is reachable, the bot chooses a reachable unexplored frontier. Combat suspends navigation, and navigation rescans and replans from the player's current position afterward.
 
-This prototype is not yet a general level-completion bot. It has no authored route to exits, traversal objectives, skulls, or switches, and it cannot yet guarantee a P-rank on any level.
+Movement follows local path corners with smoothed camera turning, capsule clearance checks, conservative drop checks, and configurable speed. Repeated failures escalate through alternate recovery directions and eventually reject that objective for the current run. The overlay and optional world-space debug lines expose the current objective, route corner, movement state, grounded state, and recovery level.
+
+The existing combat behavior remains intact: the bot scores visible enemies, aims through `CameraController`, moves through `NewMovement`, fires known weapons, rotates populated weapon slots, and can conservatively restart a clearly failed P-rank attempt. Automatic restarts remain off by default.
+
+This milestone does not yet execute switches, keys, elevators, moving platforms, scripted interactions, deliberate drops, or generated jump/dash links. Those real game component types are discovered and counted, but require specialized traversal adapters in later milestones.
 
 ## Build
 
@@ -40,10 +44,12 @@ When the repository is cloned outside the game directory, pass the game path exp
 
 Launch ULTRAKILL normally, open a level, and press F1. Confirm the overlay selects a visible enemy and the BepInEx console contains `IM ULTRAKILLING IT loaded`. Press F1 before menus, elevators, or taking manual control. After closing the game, inspect `BepInEx/LogOutput.log` for exceptions from `IMULTRAKILLINGIT`.
 
-## Main blockers to a reliable first P-rank
+## Later milestones
 
-- Per-level routes and objective/exit metadata
-- Hazard-aware path planning and fall recovery
+- Switch/key/arena dependency adapters and dynamic progression graph edges
+- Validated jump/drop traversal edges and fall recovery
+- Elevator and moving-platform executors
+- Runtime traversal-edge reliability and risk-weighted route costs
 - Encounter-trigger completeness and unreachable-enemy routes
 - Cooldown-aware alternate-fire, parry, projectile-boost, and combo policies
 - Validation of rank thresholds and restart timing across every difficulty

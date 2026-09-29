@@ -31,8 +31,15 @@ public static class DecisionLogic
     public static bool PRrankStillPossible(float elapsedSeconds, float sRankSeconds, int restarts) =>
         restarts == 0 && (sRankSeconds <= 0f || elapsedSeconds <= sRankSeconds);
 
-    public static float ScoreNavigationGoal(float pathLength, bool openable, bool visited, bool reachable) =>
-        !openable || visited || !reachable ? float.NegativeInfinity : 100f - pathLength;
+    public static float ScoreNavigationGoal(float pathLength, int priority, bool available, bool completed,
+        bool visited, bool reachable, int failures) =>
+        !available || completed || visited || !reachable
+            ? float.NegativeInfinity
+            : priority * 100f - pathLength - failures * 250f;
 
     public static bool HasCrossedDoor(float signedDistance) => signedDistance > 0.75f;
+
+    public static bool IsStuck(float routeProgress, float displacement, float elapsed, float timeout,
+        float minimumProgress) =>
+        elapsed >= timeout && routeProgress < minimumProgress && displacement < minimumProgress;
 }

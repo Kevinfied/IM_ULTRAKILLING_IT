@@ -4,8 +4,8 @@ using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
+using IMULTRAKILLINGIT.Navigation;
 using UnityEngine;
-using UnityEngine.AI;
 
 namespace IMULTRAKILLINGIT;
 
@@ -27,6 +27,13 @@ public sealed class Plugin : BaseUnityPlugin
     private ConfigEntry<float> killsWeight = null!;
     private ConfigEntry<float> styleWeight = null!;
     private ConfigEntry<bool> autoRestart = null!;
+    private ConfigEntry<float> waypointArrival = null!;
+    private ConfigEntry<float> stuckTimeout = null!;
+    private ConfigEntry<float> minimumProgress = null!;
+    private ConfigEntry<float> replanCooldown = null!;
+    private ConfigEntry<float> maximumSafeDrop = null!;
+    private ConfigEntry<bool> debugDrawing = null!;
+    private ConfigEntry<bool> verboseNavigationLogs = null!;
 
     private BotState state;
     private bool enabledBot;
@@ -38,24 +45,14 @@ public sealed class Plugin : BaseUnityPlugin
     private NewMovement? player;
     private GunControl? guns;
     private StatsManager? stats;
-    private Door? navigationDoor;
-    private Vector3 doorApproachDirection;
-    private Vector3 destination;
-    private Vector3 navigationGoal;
-    private Vector3[] pathCorners = Array.Empty<Vector3>();
-    private int pathCornerIndex;
-    private bool usingNavMesh;
-    private Vector3 progressOrigin;
+    private Vector3 combatDestination;
     private float nextScan;
     private float nextAttack;
     private float nextJump;
     private float nextWeaponRotation;
-    private float nextProgressCheck;
-    private float recoveryUntil;
-    private float navigationCommitUntil;
-    private float nextPathRefresh;
+    private float combatRecoveryUntil;
     private int nextSlot;
-    private readonly HashSet<int> visitedDoors = new();
+    private NavigationController navigation = null!;
 
     private static readonly BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
     private readonly Dictionary<Type, MethodInfo?> shootMethods = new();
@@ -75,6 +72,22 @@ public sealed class Plugin : BaseUnityPlugin
         killsWeight = Config.Bind("Priorities", "Kills", 1f, "Preference for targets that count as kills.");
         styleWeight = Config.Bind("Priorities", "Style", 0.65f, "Preference for bosses and fresh weapon use.");
         autoRestart = Config.Bind("PRank", "AutoRestart", false, "Restart when S-time is certainly missed or a restart occurred.");
+        waypointArrival = Config.Bind("Navigation", "WaypointArrivalDistance", 1.5f, "Horizontal distance that reaches a path corner.");
+        stuckTimeout = Config.Bind("Navigation", "StuckTimeout", 2.5f, "Seconds without progress before recovery.");
+        minimumProgress = Config.Bind("Navigation", "MinimumProgress", 0.75f, "Meters of expected progress per stuck window.");
+        replanCooldown = Config.Bind("Navigation", "ReplanCooldown", 0.75f, "Minimum seconds between dynamic route checks.");
+        maximumSafeDrop = Config.Bind("Navigation", "MaximumSafeDrop", 5f, "Largest drop accepted by grounded movement.");
+        debugDrawing = Config.Bind("Navigation", "DebugDrawing", true, "Draw route lines and waypoints in the world.");
+        verboseNavigationLogs = Config.Bind("Navigation", "VerboseLogs", false, "Write detailed navigation transitions to BepInEx logs.");
+        navigation = new NavigationController(Logger, new NavigationSettings(
+            () => moveSpeed.Value,
+            () => Mathf.Max(0.5f, waypointArrival.Value),
+            () => Mathf.Max(1f, stuckTimeout.Value),
+            () => Mathf.Max(0.1f, minimumProgress.Value),
+            () => Mathf.Max(0.25f, replanCooldown.Value),
+            () => Mathf.Max(1f, maximumSafeDrop.Value),
+            () => showDebug && debugDrawing.Value,
+            () => verboseNavigationLogs.Value));
         Logger.LogInfo("IM ULTRAKILLING IT loaded. F1 toggle, F2 pause, F3 restart, F4 overlay.");
         gameObject.hideFlags = HideFlags.DontSaveInEditor;
     }
@@ -94,26 +107,24 @@ public sealed class Plugin : BaseUnityPlugin
         try
         {
             RefreshGameObjects();
-            if (player == null || player.dead || player.levelOver)
+            if (player == null)
             {
-                Transition(BotState.Recover, player == null ? "Waiting for player" : "Player unavailable");
+                Transition(BotState.Recover, "Waiting for player");
                 return;
             }
+            if (navigation.State == NavigationState.Disabled) navigation.Enable(player);
             if (Time.unscaledTime >= nextScan)
             {
                 nextScan = Time.unscaledTime + 0.25f;
                 target = FindTarget();
-                if (target == null && navigationDoor == null && Time.unscaledTime >= recoveryUntil
-                    && Time.unscaledTime >= navigationCommitUntil)
-                    destination = FindNavigationDestination();
             }
-            if (target != null && !target.dead)
+            bool combatActive = target != null && !target.dead;
+            navigation.Update(player, combatActive);
+            if (combatActive)
             {
-                navigationDoor = null;
-                usingNavMesh = false;
-                destination = target.GetCenter().position;
-                AimAt(destination);
-                float distance = Vector3.Distance(player.transform.position, destination);
+                combatDestination = target!.GetCenter().position;
+                AimAt(combatDestination);
+                float distance = Vector3.Distance(player.transform.position, combatDestination);
                 Transition(distance > 18f ? BotState.Chase : BotState.Engage,
                     distance > 18f ? "Closing on target" : "Target in attack range");
                 if (Time.unscaledTime >= nextAttack) Attack();
@@ -121,17 +132,16 @@ public sealed class Plugin : BaseUnityPlugin
             else
             {
                 target = null;
-                if (Time.unscaledTime >= recoveryUntil)
-                    Transition(BotState.Explore, navigationDoor != null ? "Moving to open door" : "Scanning for a clear route");
-                AimAt(destination + player.transform.up);
+                NavigationSnapshot nav = navigation.Snapshot;
+                Transition(nav.State == NavigationState.Recovering ? BotState.Recover : BotState.Explore, nav.Reason);
             }
             RotateWeapon();
-            CheckProgress();
             CheckPRankFailure();
         }
         catch (Exception exception)
         {
             enabledBot = false;
+            navigation.Disable("Disabled after error");
             Transition(BotState.Disabled, "Disabled after error");
             Logger.LogError(exception);
         }
@@ -140,46 +150,40 @@ public sealed class Plugin : BaseUnityPlugin
     private void FixedUpdate()
     {
         if (!enabledBot || paused || player == null || player.dead || state == BotState.Disabled) return;
-        UpdatePathSteering();
-        Vector3 up = player.transform.up;
-        Vector3 toward = Vector3.ProjectOnPlane(destination - player.transform.position, up).normalized;
-        if (state == BotState.Recover && Time.unscaledTime < recoveryUntil)
-            toward = Quaternion.AngleAxis(65f, up) * player.transform.forward;
-        else if (state == BotState.Engage)
-            toward = (toward + player.transform.right * Mathf.Sin(Time.time * 2.2f) * 0.75f).normalized;
+        if (target != null && !target.dead) CombatFixedUpdate();
+        else navigation.FixedTick(player);
+    }
 
+    private void CombatFixedUpdate()
+    {
+        if (player == null) return;
+        Vector3 up = player.transform.up;
+        Vector3 toward = Vector3.ProjectOnPlane(combatDestination - player.transform.position, up).normalized;
+        if (state == BotState.Engage)
+            toward = (toward + player.transform.right * Mathf.Sin(Time.time * 2.2f) * 0.75f).normalized;
+        bool lowObstacle = Physics.Raycast(player.transform.position + up * 0.25f, toward, 1.5f,
+            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+        bool wall = Physics.Raycast(player.transform.position + up * 1.1f, toward, 1.5f,
+            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+        if (wall)
+        {
+            toward = Quaternion.AngleAxis(Time.time % 2f < 1f ? 80f : -80f, up) * toward;
+            combatRecoveryUntil = Time.unscaledTime + 0.5f;
+            action = "Combat sidestep around wall";
+        }
         Vector3 vertical = Vector3.Project(player.rb.velocity, up);
         Vector3 horizontal = Vector3.ProjectOnPlane(player.rb.velocity, up);
         float speed = state == BotState.Engage ? moveSpeed.Value * 0.7f : moveSpeed.Value;
-        player.rb.velocity = Vector3.MoveTowards(horizontal, toward * speed, 55f * Time.fixedDeltaTime) + vertical;
-        bool lowObstacle = Physics.Raycast(player.transform.position + up * 0.25f, toward, 1.5f, Physics.DefaultRaycastLayers,
-            QueryTriggerInteraction.Ignore);
-        bool wall = Physics.Raycast(player.transform.position + up * 1.1f, toward, out RaycastHit wallHit, 1.5f,
-            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
-        bool intendedDoor = wall && navigationDoor != null && wallHit.transform.GetComponentInParent<Door>() == navigationDoor;
-        if (intendedDoor)
-        {
-            wall = false;
-            lowObstacle = false;
-        }
-        if (wall && Time.unscaledTime >= recoveryUntil)
-        {
-            if (navigationDoor != null && target == null)
-            {
-                visitedDoors.Add(navigationDoor.GetInstanceID());
-                navigationDoor = null;
-                usingNavMesh = false;
-            }
-            recoveryUntil = Time.unscaledTime + 1.25f;
-            destination = player.transform.position + Quaternion.AngleAxis(75f, up) * toward * 12f;
-            Transition(BotState.Recover, "Full-height wall; turning instead of wall-jumping");
-        }
-        else if (Time.unscaledTime >= nextJump && ((lowObstacle && !wall) || destination.y > player.transform.position.y + 2.5f))
+        player.rb.velocity = Vector3.MoveTowards(horizontal, toward * speed, 80f * Time.fixedDeltaTime) + vertical;
+        if (Time.unscaledTime >= nextJump && ((lowObstacle && !wall)
+            || combatDestination.y > player.transform.position.y + 2.5f))
         {
             nextJump = Time.unscaledTime + 0.8f;
             player.Jump();
             action = lowObstacle ? "Jump low obstacle" : "Jump toward target";
         }
+        else if (Time.unscaledTime >= combatRecoveryUntil)
+            action = "Combat movement";
     }
 
     private void SetEnabled(bool value)
@@ -187,31 +191,26 @@ public sealed class Plugin : BaseUnityPlugin
         enabledBot = value;
         paused = false;
         target = null;
-        if (value)
+        RefreshGameObjects();
+        if (value && player != null)
         {
-            RefreshGameObjects();
-            visitedDoors.Clear();
-            navigationDoor = null;
-            usingNavMesh = false;
-            pathCorners = Array.Empty<Vector3>();
-            navigationCommitUntil = 0f;
-            MarkNearbyDoorsVisited();
-            progressOrigin = player != null ? player.transform.position : Vector3.zero;
-            nextProgressCheck = Time.unscaledTime + 2f;
+            navigation.Enable(player);
             Transition(BotState.Explore, "Enabled by user");
         }
         else
         {
-            Transition(BotState.Disabled, "Disabled by user; player control untouched");
+            navigation.Disable(value ? "Waiting for player" : "Disabled by user");
+            Transition(value ? BotState.Recover : BotState.Disabled,
+                value ? "Waiting for player" : "Disabled by user; player control untouched");
             action = "Idle";
         }
     }
 
     private void RefreshGameObjects()
     {
-        player ??= MonoSingleton<NewMovement>.Instance;
-        guns ??= MonoSingleton<GunControl>.Instance;
-        stats ??= MonoSingleton<StatsManager>.Instance;
+        if (player == null) player = MonoSingleton<NewMovement>.Instance;
+        if (guns == null) guns = MonoSingleton<GunControl>.Instance;
+        if (stats == null) stats = MonoSingleton<StatsManager>.Instance;
     }
 
     private EnemyIdentifier? FindTarget()
@@ -235,111 +234,6 @@ public sealed class Plugin : BaseUnityPlugin
             bestScore = score;
         }
         return best;
-    }
-
-    private Vector3 FindNavigationDestination()
-    {
-        if (player == null) return Vector3.zero;
-        Door? best = null;
-        float bestScore = float.NegativeInfinity;
-        Vector3[] bestPath = Array.Empty<Vector3>();
-        foreach (Door door in FindObjectsOfType<Door>())
-        {
-            bool reachable = TryCalculateNavPath(door.transform.position, out Vector3[] path, out float pathLength);
-            float score = DecisionLogic.ScoreNavigationGoal(pathLength, !door.locked,
-                visitedDoors.Contains(door.GetInstanceID()), reachable);
-            if (score <= bestScore) continue;
-            best = door;
-            bestScore = score;
-            bestPath = path;
-        }
-
-        navigationDoor = best;
-        if (best != null)
-        {
-            action = $"NavMesh to openable {best.name}";
-            Vector3 doorPosition = best.transform.position;
-            Vector3 approachOrigin = bestPath.Length > 1 ? bestPath[bestPath.Length - 2] : player.transform.position;
-            doorApproachDirection = Vector3.ProjectOnPlane(doorPosition - approachOrigin, player.transform.up).normalized;
-            if (doorApproachDirection.sqrMagnitude < 0.01f)
-                doorApproachDirection = Vector3.ProjectOnPlane(doorPosition - player.transform.position,
-                    player.transform.up).normalized;
-            navigationGoal = doorPosition + doorApproachDirection * 3f;
-            if (TryCalculateNavPath(navigationGoal, out Vector3[] throughDoorPath, out _)) bestPath = throughDoorPath;
-            SetPath(bestPath);
-            return destination;
-        }
-
-        usingNavMesh = false;
-        pathCorners = Array.Empty<Vector3>();
-        Vector3 origin = player.transform.position + player.transform.up;
-        Vector3 bestDirection = player.transform.forward;
-        float bestClearance = 0f;
-        foreach (float angle in new[] { 0f, 45f, -45f, 90f, -90f })
-        {
-            Vector3 direction = Quaternion.AngleAxis(angle, player.transform.up) * player.transform.forward;
-            float clearance = Physics.Raycast(origin, direction, out RaycastHit hit, 15f,
-                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore) ? hit.distance : 15f;
-            if (clearance <= bestClearance) continue;
-            bestClearance = clearance;
-            bestDirection = direction;
-        }
-        action = "Explore clearest direction";
-        return player.transform.position + bestDirection * Mathf.Max(4f, bestClearance - 1f);
-    }
-
-    private void MarkNearbyDoorsVisited(float radius = 4f)
-    {
-        if (player == null) return;
-        foreach (Door door in FindObjectsOfType<Door>())
-            if (Vector3.Distance(player.transform.position, door.transform.position) < radius)
-                visitedDoors.Add(door.GetInstanceID());
-    }
-
-    private bool TryCalculateNavPath(Vector3 goal, out Vector3[] corners, out float length)
-    {
-        corners = Array.Empty<Vector3>();
-        length = float.PositiveInfinity;
-        if (player == null
-            || !NavMesh.SamplePosition(player.transform.position, out NavMeshHit start, 4f, NavMesh.AllAreas)
-            || !NavMesh.SamplePosition(goal, out NavMeshHit end, 4f, NavMesh.AllAreas)) return false;
-        var path = new NavMeshPath();
-        if (!NavMesh.CalculatePath(start.position, end.position, NavMesh.AllAreas, path)
-            || path.status != NavMeshPathStatus.PathComplete || path.corners.Length < 2) return false;
-        corners = path.corners;
-        length = 0f;
-        for (int i = 1; i < corners.Length; i++) length += Vector3.Distance(corners[i - 1], corners[i]);
-        return true;
-    }
-
-    private void SetPath(Vector3[] corners)
-    {
-        pathCorners = corners;
-        pathCornerIndex = corners.Length > 1 ? 1 : 0;
-        usingNavMesh = corners.Length > 0;
-        if (usingNavMesh) destination = corners[pathCornerIndex];
-        nextPathRefresh = Time.unscaledTime + 0.5f;
-    }
-
-    private void UpdatePathSteering()
-    {
-        if (!usingNavMesh || player == null || target != null) return;
-        if (navigationDoor != null && navigationDoor.locked)
-        {
-            navigationDoor = null;
-            usingNavMesh = false;
-            return;
-        }
-        if (navigationDoor != null && Time.unscaledTime >= nextPathRefresh)
-        {
-            nextPathRefresh = Time.unscaledTime + 0.5f;
-            if (TryCalculateNavPath(navigationGoal, out Vector3[] refreshedPath, out _)) SetPath(refreshedPath);
-        }
-        while (pathCornerIndex < pathCorners.Length - 1
-               && Vector3.ProjectOnPlane(pathCorners[pathCornerIndex] - player.transform.position,
-                   player.transform.up).sqrMagnitude < 2.25f)
-            pathCornerIndex++;
-        if (pathCornerIndex < pathCorners.Length) destination = pathCorners[pathCornerIndex];
     }
 
     private static bool HasLineOfSight(Vector3 origin, Vector3 point, EnemyIdentifier enemy)
@@ -416,41 +310,6 @@ public sealed class Plugin : BaseUnityPlugin
         }
     }
 
-    private void CheckProgress()
-    {
-        if (player == null || Time.unscaledTime < nextProgressCheck) return;
-        if (navigationDoor != null && target == null && DecisionLogic.HasCrossedDoor(Vector3.Dot(
-                player.transform.position - navigationDoor.transform.position, doorApproachDirection)))
-        {
-            visitedDoors.Add(navigationDoor.GetInstanceID());
-            MarkNearbyDoorsVisited(2.5f);
-            navigationDoor = null;
-            usingNavMesh = false;
-            pathCorners = Array.Empty<Vector3>();
-            destination = player.transform.position + doorApproachDirection * 8f;
-            navigationCommitUntil = Time.unscaledTime + 2f;
-            progressOrigin = player.transform.position;
-            nextProgressCheck = Time.unscaledTime + 2f;
-            action = "Crossed doorway; continue forward";
-            return;
-        }
-        Vector3 route = destination - progressOrigin;
-        Vector3 movement = player.transform.position - progressOrigin;
-        float progress = route.sqrMagnitude > 0.01f ? Vector3.Dot(movement, route.normalized) : movement.magnitude;
-        progressOrigin = player.transform.position;
-        nextProgressCheck = Time.unscaledTime + 2f;
-        if (progress >= 1f || state == BotState.Engage) return;
-        if (navigationDoor != null && target == null)
-        {
-            visitedDoors.Add(navigationDoor.GetInstanceID());
-            navigationDoor = null;
-            usingNavMesh = false;
-        }
-        recoveryUntil = Time.unscaledTime + 1.5f;
-        nextJump = 0f;
-        Transition(BotState.Recover, $"Stuck: only {progress:0.0}m progress");
-    }
-
     private void CheckPRankFailure()
     {
         if (!autoRestart.Value || stats == null || stats.timeRanks == null || stats.timeRanks.Length == 0) return;
@@ -464,6 +323,7 @@ public sealed class Plugin : BaseUnityPlugin
         Logger.LogWarning($"Restarting: {why}");
         reason = why;
         target = null;
+        navigation.ResetForRestart();
         OptionsManager? options = OptionsManager.Instance;
         if (options != null) options.RestartMission();
         else Logger.LogWarning("Restart requested before OptionsManager was available.");
@@ -480,16 +340,22 @@ public sealed class Plugin : BaseUnityPlugin
     private void OnGUI()
     {
         if (!showDebug) return;
-        GUI.Box(new Rect(12, 12, 430, 190), "IM ULTRAKILLING IT");
-        GUILayout.BeginArea(new Rect(24, 40, 405, 155));
-        GUILayout.Label($"State: {state} | F1 toggle | F2 pause | F3 restart | F4 overlay");
-        GUILayout.Label($"Target: {(target != null ? target.FullName : "none")}");
-        GUILayout.Label($"Action: {action}");
-        GUILayout.Label($"Destination: {destination.x:0.0}, {destination.y:0.0}, {destination.z:0.0}");
-        GUILayout.Label($"Path: {(usingNavMesh ? $"NavMesh corner {pathCornerIndex + 1}/{pathCorners.Length}" : "ray fallback")}");
+        NavigationSnapshot nav = navigation.Snapshot;
+        GUI.Box(new Rect(12, 12, 560, 275), "IM ULTRAKILLING IT");
+        GUILayout.BeginArea(new Rect(24, 40, 535, 235));
+        GUILayout.Label($"State: {state}/{nav.State} | F1 toggle | F2 pause | F3 restart | F4 overlay");
+        GUILayout.Label($"Combat target: {(target != null ? target.FullName : "none")}");
+        GUILayout.Label($"Objective: {nav.Objective}");
+        GUILayout.Label($"Action: {(target != null ? action : nav.Action)}");
+        GUILayout.Label($"Waypoint: {nav.Waypoint.x:0.0}, {nav.Waypoint.y:0.0}, {nav.Waypoint.z:0.0} "
+                        + $"({nav.Corner + 1}/{Mathf.Max(1, nav.CornerCount)})");
+        GUILayout.Label($"World: {nav.Doors} doors, {nav.Checkpoints} checkpoints, {nav.Exits} exits | recovery {nav.RecoveryLevel}");
+        if (player != null)
+            GUILayout.Label($"Velocity: {player.rb.velocity.magnitude:0.0} | grounded: {player.standing} | falling: {player.falling}");
         if (stats != null)
-            GUILayout.Label($"Time: {stats.seconds:0.0}/{Last(stats.timeRanks)}s  Kills: {stats.kills}/{Last(stats.killRanks)}  Style: {stats.stylePoints}/{Last(stats.styleRanks)}");
-        GUILayout.Label($"Reason: {reason}");
+            GUILayout.Label($"Time: {stats.seconds:0.0}/{Last(stats.timeRanks)}s  Kills: {stats.kills}/{Last(stats.killRanks)}  "
+                            + $"Style: {stats.stylePoints}/{Last(stats.styleRanks)}");
+        GUILayout.Label($"Reason: {nav.Reason}");
         GUILayout.EndArea();
     }
 
