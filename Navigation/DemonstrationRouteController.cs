@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using BepInEx;
 using BepInEx.Logging;
@@ -11,14 +12,14 @@ namespace IMULTRAKILLINGIT.Navigation;
 internal sealed class DemonstrationRouteController
 {
     [Serializable]
-    public sealed class RouteData
+    private sealed class RouteData
     {
         public string scene = string.Empty;
         public List<RoutePoint> points = new();
     }
 
     [Serializable]
-    public sealed class RoutePoint
+    private sealed class RoutePoint
     {
         public Vector3 position;
         public float yaw;
@@ -40,8 +41,8 @@ internal sealed class DemonstrationRouteController
     {
         this.logger = logger;
         this.moveSpeed = moveSpeed;
-        string probe = JsonUtility.ToJson(new RouteData { points = new List<RoutePoint> { new() } });
-        if (!probe.Contains("\"points\"")) throw new InvalidOperationException("Route point serialization unavailable.");
+        if (!TryParsePoint(SerializePoint(new RoutePoint()), out _))
+            throw new InvalidOperationException("Route point serialization unavailable.");
     }
 
     public bool Recording { get; private set; }
@@ -94,7 +95,11 @@ internal sealed class DemonstrationRouteController
         Recording = false;
         string path = RoutePath(route.scene);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, JsonUtility.ToJson(route, true));
+        using (var writer = new StreamWriter(path, false))
+        {
+            writer.WriteLine(route.scene);
+            foreach (RoutePoint point in route.points) writer.WriteLine(SerializePoint(point));
+        }
         Status = $"Saved {route.points.Count} route points";
         logger.LogInfo($"[ROUTE] Saved {route.points.Count} points to {path}");
     }
@@ -117,8 +122,8 @@ internal sealed class DemonstrationRouteController
         if (scene.handle == completedSceneHandle) return false;
         string path = RoutePath(scene.name);
         if (!File.Exists(path)) return false;
-        RouteData? loaded = JsonUtility.FromJson<RouteData>(File.ReadAllText(path));
-        if (loaded?.points == null || loaded.points.Count < 2) return false;
+        RouteData? loaded = LoadRoute(path);
+        if (loaded == null || loaded.points.Count < 2) return false;
         route = loaded;
         sceneHandle = scene.handle;
         pointIndex = Vector3.Distance(player.transform.position, loaded.points[0].position) <= 10f
@@ -218,7 +223,49 @@ internal sealed class DemonstrationRouteController
     private static string RoutePath(string scene)
     {
         foreach (char invalid in Path.GetInvalidFileNameChars()) scene = scene.Replace(invalid, '_');
-        return Path.Combine(Paths.ConfigPath, "IMULTRAKILLINGIT", "routes", scene + ".json");
+        return Path.Combine(Paths.ConfigPath, "IMULTRAKILLINGIT", "routes", scene + ".route");
+    }
+
+    private static RouteData? LoadRoute(string path)
+    {
+        using var reader = new StreamReader(path);
+        string? scene = reader.ReadLine();
+        if (string.IsNullOrEmpty(scene)) return null;
+        var loaded = new RouteData { scene = scene };
+        string? line;
+        while ((line = reader.ReadLine()) != null)
+            if (TryParsePoint(line, out RoutePoint point)) loaded.points.Add(point);
+        return loaded;
+    }
+
+    private static string SerializePoint(RoutePoint point) => string.Join("|", new[]
+    {
+        point.position.x.ToString("R", CultureInfo.InvariantCulture),
+        point.position.y.ToString("R", CultureInfo.InvariantCulture),
+        point.position.z.ToString("R", CultureInfo.InvariantCulture),
+        point.yaw.ToString("R", CultureInfo.InvariantCulture),
+        point.pitch.ToString("R", CultureInfo.InvariantCulture),
+        point.jump ? "1" : "0",
+        point.fire ? "1" : "0"
+    });
+
+    private static bool TryParsePoint(string line, out RoutePoint point)
+    {
+        point = new RoutePoint();
+        string[] values = line.Split('|');
+        if (values.Length != 7
+            || !float.TryParse(values[0], NumberStyles.Float, CultureInfo.InvariantCulture, out float x)
+            || !float.TryParse(values[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float y)
+            || !float.TryParse(values[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float z)
+            || !float.TryParse(values[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float yaw)
+            || !float.TryParse(values[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float pitch))
+            return false;
+        point.position = new Vector3(x, y, z);
+        point.yaw = yaw;
+        point.pitch = pitch;
+        point.jump = values[5] == "1";
+        point.fire = values[6] == "1";
+        return true;
     }
 
     private static float NormalizeAngle(float angle) => angle > 180f ? angle - 360f : angle;
