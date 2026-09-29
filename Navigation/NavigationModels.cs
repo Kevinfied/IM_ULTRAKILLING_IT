@@ -46,9 +46,15 @@ internal abstract class NavigationObjective
 
 internal sealed class DoorObjective : NavigationObjective
 {
-    public DoorObjective(Door door) : base(door, NavigationObjectiveType.Door, 10, $"Door {door.name}") => Door = door;
+    public DoorObjective(Door door, DoorController trigger)
+        : base(trigger, NavigationObjectiveType.Door, 10, $"Door {door.name}")
+    {
+        Door = door;
+        Trigger = trigger;
+    }
     public Door Door { get; }
-    public override bool IsAvailable => Door != null && Door.isActiveAndEnabled && !Door.locked;
+    public DoorController Trigger { get; }
+    public override bool IsAvailable => Trigger.isActiveAndEnabled && Door.isActiveAndEnabled && !Door.locked;
     public override bool IsCompleted => false;
 }
 

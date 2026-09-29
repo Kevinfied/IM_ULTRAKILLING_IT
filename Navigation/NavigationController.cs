@@ -164,7 +164,7 @@ internal sealed class NavigationController
         }
         if (objective is DoorObjective doorObjective)
         {
-            float crossing = Vector3.Dot(player.transform.position - doorObjective.Door.transform.position,
+            float crossing = Vector3.Dot(player.transform.position - doorObjective.Position,
                 route.ApproachDirection);
             if (DecisionLogic.HasCrossedDoor(crossing))
             {
@@ -173,10 +173,9 @@ internal sealed class NavigationController
                 CompleteObjective(player, "Crossed doorway");
                 return;
             }
-            if ((doorObjective.Door.open || doorObjective.Door.isFullyOpened)
-                && (route.Goal - doorObjective.Door.transform.position).sqrMagnitude < 2f)
+            if (doorObjective.Door.open || doorObjective.Door.isFullyOpened)
             {
-                Vector3 beyond = doorObjective.Door.transform.position + route.ApproachDirection * 3f;
+                Vector3 beyond = doorObjective.Position + route.ApproachDirection * 5f;
                 if (planner.TryPlanTo(player.transform.position, player.transform.up, beyond, out NavigationRoute through))
                     SetRoute(player, objective, through, NavigationState.FollowingRoute, "Door opened; path through it");
             }

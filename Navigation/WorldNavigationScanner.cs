@@ -9,6 +9,7 @@ internal sealed class WorldNavigationScanner
 
     public IReadOnlyList<NavigationObjective> Objectives => objectives;
     public Door[] Doors { get; private set; } = System.Array.Empty<Door>();
+    public DoorController[] DoorControllers { get; private set; } = System.Array.Empty<DoorController>();
     public CheckPoint[] Checkpoints { get; private set; } = System.Array.Empty<CheckPoint>();
     public FinalPit[] Exits { get; private set; } = System.Array.Empty<FinalPit>();
     public int ArenaCount { get; private set; }
@@ -19,6 +20,7 @@ internal sealed class WorldNavigationScanner
     {
         objectives.Clear();
         Doors = Object.FindObjectsOfType<Door>();
+        DoorControllers = Object.FindObjectsOfType<DoorController>();
         Checkpoints = Object.FindObjectsOfType<CheckPoint>();
         Exits = Object.FindObjectsOfType<FinalPit>();
         ArenaCount = Object.FindObjectsOfType<ActivateArena>().Length;
@@ -31,17 +33,23 @@ internal sealed class WorldNavigationScanner
         foreach (CheckPoint checkpoint in Checkpoints)
             if (checkpoint != null && checkpoint.isActiveAndEnabled)
                 objectives.Add(new CheckpointObjective(checkpoint));
-        foreach (Door door in Doors)
+        foreach (DoorController controller in DoorControllers)
+        {
+            if (controller == null || !controller.isActiveAndEnabled) continue;
+            Door door = controller.GetComponentInParent<Door>();
+            if (door == null && controller.transform.parent != null)
+                door = controller.transform.parent.GetComponentInChildren<Door>();
             if (door != null && door.isActiveAndEnabled)
-                objectives.Add(new DoorObjective(door));
+                objectives.Add(new DoorObjective(door, controller));
+        }
     }
 
     public void MarkNearbyDoors(Vector3 position, float radius, ISet<int> visited)
     {
         float radiusSquared = radius * radius;
-        foreach (Door door in Doors)
-            if (door != null && (door.transform.position - position).sqrMagnitude < radiusSquared)
-                visited.Add(door.GetInstanceID());
+        foreach (NavigationObjective objective in objectives)
+            if (objective is DoorObjective && (objective.Position - position).sqrMagnitude < radiusSquared)
+                visited.Add(objective.Id);
     }
 
     public void SeedCompletedProgress(ISet<int> visited)
