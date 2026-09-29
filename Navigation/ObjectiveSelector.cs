@@ -6,7 +6,7 @@ namespace IMULTRAKILLINGIT.Navigation;
 internal sealed class ObjectiveSelector
 {
     public bool TrySelect(Vector3 playerPosition, Vector3 up, IReadOnlyList<NavigationObjective> objectives,
-        ISet<int> visited, ISet<int> rejected, IReadOnlyDictionary<int, int> failures, NavMeshRoutePlanner planner,
+        ISet<int> visited, IReadOnlyDictionary<int, int> failures, NavMeshRoutePlanner planner,
         out NavigationObjective objective, out NavigationRoute route)
     {
         objective = null!;
@@ -14,8 +14,7 @@ internal sealed class ObjectiveSelector
         float bestScore = float.NegativeInfinity;
         foreach (NavigationObjective candidate in objectives)
         {
-            if (!candidate.IsAvailable || candidate.IsCompleted || visited.Contains(candidate.Id)
-                || rejected.Contains(candidate.Id)) continue;
+            if (!candidate.IsAvailable || candidate.IsCompleted || visited.Contains(candidate.Id)) continue;
             bool reachable = planner.TryPlan(playerPosition, up, candidate, out NavigationRoute candidateRoute);
             failures.TryGetValue(candidate.Id, out int failureCount);
             float score = DecisionLogic.ScoreNavigationGoal(reachable ? candidateRoute.Cost : float.PositiveInfinity,

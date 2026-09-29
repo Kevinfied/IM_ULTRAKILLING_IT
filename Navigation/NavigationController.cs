@@ -16,7 +16,6 @@ internal sealed class NavigationController
     private readonly StuckDetector stuck;
     private readonly NavigationRecoveryController recovery = new();
     private readonly HashSet<int> visitedObjectives = new();
-    private readonly HashSet<int> rejectedObjectives = new();
     private readonly HashSet<Vector2Int> visitedRegions = new();
     private NavigationObjective? objective;
     private NavigationRoute? route;
@@ -46,7 +45,6 @@ internal sealed class NavigationController
     public void Enable(NewMovement player)
     {
         visitedObjectives.Clear();
-        rejectedObjectives.Clear();
         visitedRegions.Clear();
         recovery.Reset();
         movement.Clear("Initializing navigation");
@@ -195,17 +193,13 @@ internal sealed class NavigationController
                 action = "At objective; waiting for its trigger/state change";
         }
 
-        if (Time.unscaledTime >= nextDynamicCheck)
-        {
-            nextDynamicCheck = Time.unscaledTime + Mathf.Max(0.25f, settings.ReplanCooldown());
-            if (!string.IsNullOrEmpty(movement.BlockedReason))
-            {
-                BeginRecovery(player, movement.BlockedReason);
-                return;
-            }
-        }
         if (stuck.Check(player.transform.position, movement.CurrentWaypoint))
-            BeginRecovery(player, $"No route progress ({stuck.LastProgress:0.0}m)");
+        {
+            string blocked = string.IsNullOrEmpty(movement.BlockedReason)
+                ? $"No route progress ({stuck.LastProgress:0.0}m)"
+                : movement.BlockedReason;
+            BeginRecovery(player, blocked);
+        }
 
         movement.DrawDebug();
     }
@@ -222,7 +216,7 @@ internal sealed class NavigationController
     {
         scanner.Refresh();
         if (selector.TrySelect(player.transform.position, player.transform.up, scanner.Objectives, visitedObjectives,
-                rejectedObjectives, recovery.Failures, planner, out NavigationObjective selected,
+                recovery.Failures, planner, out NavigationObjective selected,
                 out NavigationRoute selectedRoute))
         {
             SetRoute(player, selected, selectedRoute, NavigationState.FollowingRoute,
@@ -274,8 +268,6 @@ internal sealed class NavigationController
     {
         int objectiveId = objective?.Id ?? 0;
         recovery.Begin(player, objectiveId);
-        if (objective != null && recovery.ShouldAbandon(objectiveId))
-            rejectedObjectives.Add(objectiveId);
         movement.Clear("Recovery maneuver");
         route = null;
         Transition(NavigationState.Recovering, $"{why}; recovery level {recovery.Level}");

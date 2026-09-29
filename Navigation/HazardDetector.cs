@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.AI;
 
 namespace IMULTRAKILLINGIT.Navigation;
 
@@ -8,7 +9,16 @@ internal sealed class HazardDetector
     {
         if (!player.standing || direction.sqrMagnitude < 0.01f) return true;
         Vector3 up = player.transform.up;
-        Vector3 origin = player.transform.position + direction.normalized * 1.5f + up * 0.5f;
+        Vector3 lookAhead = player.transform.position + direction.normalized * 0.9f;
+        if (NavMesh.SamplePosition(lookAhead + up * 0.5f, out NavMeshHit navHit,
+                maximumSafeDrop + 0.75f, NavMesh.AllAreas))
+        {
+            Vector3 offset = navHit.position - lookAhead;
+            float sideways = Vector3.ProjectOnPlane(offset, up).magnitude;
+            float drop = -Vector3.Dot(offset, up);
+            if (sideways <= 1.25f && drop <= maximumSafeDrop) return true;
+        }
+        Vector3 origin = lookAhead + up * 0.5f;
         return Physics.Raycast(origin, -up, maximumSafeDrop + 0.5f, Physics.DefaultRaycastLayers,
             QueryTriggerInteraction.Ignore);
     }
@@ -33,6 +43,9 @@ internal sealed class HazardDetector
         foreach (RaycastHit candidate in hits)
         {
             if (candidate.collider == null || candidate.collider.transform.IsChildOf(player.transform)) continue;
+            if (candidate.collider.GetComponentInParent<EnemyIdentifier>() != null) continue;
+            Rigidbody body = candidate.collider.attachedRigidbody;
+            if (body != null && !body.isKinematic) continue;
             if (candidate.distance >= nearest) continue;
             nearest = candidate.distance;
             hit = candidate;

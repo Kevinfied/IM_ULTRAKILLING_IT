@@ -24,6 +24,8 @@ Check(float.IsNegativeInfinity(DecisionLogic.ScoreNavigationGoal(1f, 10, false, 
     "Unavailable objectives should not be selected.");
 Check(float.IsNegativeInfinity(DecisionLogic.ScoreNavigationGoal(1f, 10, true, false, false, false, 0)),
     "Objectives without a complete path should not be selected.");
+Check(!float.IsNegativeInfinity(DecisionLogic.ScoreNavigationGoal(10f, 10, true, false, false, true, 3)),
+    "Repeated local failures should penalize an objective without permanently deleting it.");
 Check(!DecisionLogic.HasCrossedDoor(0.5f), "Approaching a door should not count as crossing it.");
 Check(DecisionLogic.HasCrossedDoor(1f), "Moving beyond a door should count as crossing it.");
 Check(!DecisionLogic.IsStuck(0.1f, 0.1f, 1f, 2f, 0.5f), "A brief pause should not count as stuck.");
