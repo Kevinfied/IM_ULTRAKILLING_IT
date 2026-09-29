@@ -21,7 +21,7 @@ internal sealed class NavMeshRoutePlanner
     public bool TryPlan(Vector3 start, Vector3 up, NavigationObjective objective, out NavigationRoute route)
     {
         Vector3 goal = objective.Position;
-        if (!TryCalculate(start, goal, out Vector3[] corners, out float cost))
+        if (!TryCalculate(start, goal, out Vector3[] corners, out float cost, objective is DoorObjective))
         {
             route = null!;
             return false;
@@ -62,7 +62,7 @@ internal sealed class NavMeshRoutePlanner
     {
         float bestScore = float.NegativeInfinity;
         route = null!;
-        foreach (float radius in new[] { 24f, 12f })
+        foreach (float radius in new[] { 24f, 12f, 6f, 3f })
         foreach (float angle in new[] { 0f, 35f, -35f, 70f, -70f, 110f, -110f })
         {
             Vector3 candidate = start + Quaternion.AngleAxis(angle, up) * forward * radius;
@@ -82,7 +82,7 @@ internal sealed class NavMeshRoutePlanner
         new(Mathf.RoundToInt(position.x / FrontierCellSize), Mathf.RoundToInt(position.z / FrontierCellSize));
 
     private static bool TryCalculate(Vector3 startPosition, Vector3 goalPosition, out Vector3[] corners,
-        out float cost)
+        out float cost, bool allowPartial = false)
     {
         corners = Array.Empty<Vector3>();
         cost = float.PositiveInfinity;
@@ -90,7 +90,8 @@ internal sealed class NavMeshRoutePlanner
             || !NavMesh.SamplePosition(goalPosition, out NavMeshHit end, SampleRadius, NavMesh.AllAreas)) return false;
         var path = new NavMeshPath();
         if (!NavMesh.CalculatePath(start.position, end.position, NavMesh.AllAreas, path)
-            || path.status != NavMeshPathStatus.PathComplete || path.corners.Length < 2) return false;
+            || path.corners.Length < 2
+            || path.status != NavMeshPathStatus.PathComplete && !allowPartial) return false;
         corners = path.corners;
         cost = 0f;
         for (int i = 1; i < corners.Length; i++) cost += Vector3.Distance(corners[i - 1], corners[i]);
